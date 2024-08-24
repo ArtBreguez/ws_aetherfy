@@ -1,34 +1,26 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
-
-	"github.com/gorilla/websocket"
 	"wsaetherfy/currency"
 	"wsaetherfy/supabase"
+	"github.com/gorilla/websocket"
 	wsy "wsaetherfy/websocket"
 )
 
-var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return true
-	},
-}
-
-// Inicializa o cliente Supabase globalmente
+var upgrader = websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
 var supabaseClient, _ = supabase.InitializeDB()
 
 func wsHandler(w http.ResponseWriter, r *http.Request) {
-	// Obter a chave API do cabeçalho HTTP
 	apiKey := r.Header.Get("X-API-Key")
 	if apiKey == "" {
 		http.Error(w, "API key is required", http.StatusUnauthorized)
 		return
 	}
 
-	// Verificar a chave API usando o cliente Supabase
 	valid, err := supabase.VerifyAPIKey(supabaseClient, apiKey)
 	if err != nil {
 		log.Println("Erro ao verificar a chave API:", err)
@@ -40,7 +32,6 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Estabelecer a conexão WebSocket
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Println("Erro ao criar conexão WebSocket:", err)
@@ -48,24 +39,21 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	// Ler a mensagem inicial do cliente que deve conter o par de moedas no formato "EUR/USD"
 	_, message, err := conn.ReadMessage()
 	if err != nil {
 		log.Println("Erro ao ler mensagem do WebSocket:", err)
 		return
 	}
 
-	// Converter a mensagem para string e buscar o código da moeda correspondente
 	pair := string(message)
-	subs, exists := currency.GetCurrencyCode(pair)
+	_, exists := currency.GetAllCurrencyCodes()[pair]
 	if !exists {
 		log.Println("Par de moedas não encontrado:", pair)
 		conn.WriteMessage(websocket.TextMessage, []byte("Par de moedas inválido"))
 		return
 	}
 
-	// Conectar-se ao WebSocket usando o código da moeda obtido
-	yf := wsy.NewWithSub(subs)
+	yf := wsy.NewWithSub(currency.GetAllCurrencyCodes()[pair])
 	if err := yf.Connect(); err != nil {
 		log.Println("Erro ao conectar:", err)
 		return
@@ -83,7 +71,6 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Enviar os dados do ticker para o cliente via WebSocket
 	for {
 		select {
 		case output := <-ticker:
@@ -96,9 +83,55 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func priceHandler(w http.ResponseWriter, r *http.Request) {
+	apiKey := r.Header.Get("X-API-Key")
+	if apiKey == "" {
+		http.Error(w, "API key is required", http.StatusUnauthorized)
+		return
+	}
+
+	valid, err := supabase.VerifyAPIKey(supabaseClient, apiKey)
+	if err != nil {
+		log.Println("Erro ao verificar a chave API:", err)
+		http.Error(w, "Erro interno do servidor", http.StatusInternalServerError)
+		return
+	}
+	if !valid {
+		http.Error(w, "Chave API inválida", http.StatusUnauthorized)
+		return
+	}
+
+	pair := r.URL.Query().Get("pair")
+	if pair == "" {
+		http.Error(w, "Par de moedas é obrigatório", http.StatusBadRequest)
+		return
+	}
+
+	prices, found := currency.GetPrices(pair)
+	if !found {
+		http.Error(w, "Par de moedas não encontrado", http.StatusNotFound)
+		return
+	}
+
+	response := map[string]interface{}{
+		"pair":   pair,
+		"prices": prices,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
 func main() {
+	// Inicializar monitoramento de todas as moedas
+	go currency.MonitorAllCurrencies()
+
+	// Configurar handlers HTTP
 	http.HandleFunc("/ws", wsHandler)
+	http.HandleFunc("/prices", priceHandler)
+
+	// Inicializar servidor
 	port := ":8080"
-	fmt.Println("Servidor WebSocket rodando na porta", port)
+	fmt.Println("Servidor WebSocket e HTTP rodando na porta", port)
 	log.Fatal(http.ListenAndServe(port, nil))
 }
