@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 	"wsaetherfy/currency"
 	"wsaetherfy/supabase"
-	"github.com/gorilla/websocket"
 	wsy "wsaetherfy/websocket"
+
+	"github.com/gorilla/websocket"
 )
 
 var upgrader = websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
@@ -45,11 +47,30 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pair := string(message)
-	_, exists := currency.GetAllCurrencyCodes()[pair]
-	if !exists {
-		log.Println("Par de moedas não encontrado:", pair)
+	var request map[string]string
+	if err := json.Unmarshal(message, &request); err != nil {
+		conn.WriteMessage(websocket.TextMessage, []byte("Erro ao decodificar o JSON"))
+		return
+	}
+
+	pair, ok := request["pair"]
+	if !ok {
+		conn.WriteMessage(websocket.TextMessage, []byte("Par de moedas é obrigatório"))
+		return
+	}
+
+	timeframe, ok := request["timeframe"]
+	if !ok {
+		timeframe = "tick"
+	}
+
+	if _, exists := currency.GetAllCurrencyCodes()[pair]; !exists {
 		conn.WriteMessage(websocket.TextMessage, []byte("Par de moedas inválido"))
+		return
+	}
+
+	if _, valid := currency.ValidTimeframes[timeframe]; !valid {
+		conn.WriteMessage(websocket.TextMessage, []byte("Timeframe inválido"))
 		return
 	}
 
@@ -74,7 +95,11 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case output := <-ticker:
-			err := conn.WriteJSON(output)
+			priceData := map[string]interface{}{
+				"price":     output.Price,
+				"timestamp": time.Now().UTC(),
+			}
+			err := conn.WriteJSON(priceData)
 			if err != nil {
 				log.Println("Erro ao enviar mensagem via WebSocket:", err)
 				return
@@ -102,20 +127,26 @@ func priceHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pair := r.URL.Query().Get("pair")
+	timeframe := r.URL.Query().Get("timeframe")
 	if pair == "" {
 		http.Error(w, "Par de moedas é obrigatório", http.StatusBadRequest)
 		return
 	}
 
-	prices, found := currency.GetPrices(pair)
+	if timeframe == "" {
+		timeframe = "tick"
+	}
+
+	prices, found := currency.GetPrices(pair, timeframe)
 	if !found {
-		http.Error(w, "Par de moedas não encontrado", http.StatusNotFound)
+		http.Error(w, "Par de moedas ou timeframe não encontrado", http.StatusNotFound)
 		return
 	}
 
 	response := map[string]interface{}{
-		"pair":   pair,
-		"prices": prices,
+		"pair":      pair,
+		"timeframe": timeframe,
+		"prices":    prices,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

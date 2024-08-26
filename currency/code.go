@@ -3,6 +3,7 @@ package currency
 import (
 	"log"
 	"sync"
+	"time"
 	"wsaetherfy/websocket"
 )
 
@@ -57,26 +58,33 @@ var currencyMap = map[string]string{
 	"LEO/USD": "LEO-USD",
 }
 
-func GetCurrencyCode(pair string) (string, bool) {
-	code, exists := currencyMap[pair]
-	return code, exists
-}
-
-func GetAllCurrencyCodes() map[string]string {
-	return currencyMap
+var ValidTimeframes = map[string]bool{
+	"tick": true,
+	"m1":   true,
+	"m5":   true,
+	"m15":  true,
+	"m30":  true,
+	"h1":   true,
+	"h4":   true,
+	"D":    true,
 }
 
 // Estrutura para armazenar preços
 type PriceStore struct {
 	sync.RWMutex
-	prices map[string][]float64
+	prices map[string][]TickData // [pair][]TickData
+}
+
+// Estrutura para armazenar dados de tick
+type TickData struct {
+	Price     float64
+	Timestamp time.Time
 }
 
 var (
-	priceStore = &PriceStore{prices: make(map[string][]float64)}
+	priceStore = &PriceStore{prices: make(map[string][]TickData)}
 )
 
-// Função para monitorar todas as moedas
 func MonitorAllCurrencies() {
 	for pair, subs := range GetAllCurrencyCodes() {
 		go func(pair, subs string) {
@@ -102,11 +110,10 @@ func MonitorAllCurrencies() {
 				select {
 				case output := <-ticker:
 					priceStore.Lock()
-					if prices, found := priceStore.prices[pair]; found {
-						priceStore.prices[pair] = append(prices, float64(output.Price))
-					} else {
-						priceStore.prices[pair] = []float64{float64(output.Price)}
-					}
+					priceStore.prices[pair] = append(priceStore.prices[pair], TickData{
+						Price:     float64(output.Price),
+						Timestamp: time.Now(),
+					})
 					priceStore.Unlock()
 				}
 			}
@@ -114,10 +121,86 @@ func MonitorAllCurrencies() {
 	}
 }
 
-// Função para obter os preços
-func GetPrices(pair string) ([]float64, bool) {
+func GetPrices(pair string, timeframe string) ([]float64, bool) {
 	priceStore.RLock()
 	defer priceStore.RUnlock()
-	prices, found := priceStore.prices[pair]
-	return prices, found
+
+	ticks, found := priceStore.prices[pair]
+	if !found || len(ticks) == 0 {
+		return nil, false
+	}
+
+	// Se o timeframe for "tick", retornamos o último preço diretamente
+	if timeframe == "tick" {
+		lastTick := ticks[len(ticks)-1]
+		return []float64{lastTick.Price}, true
+	}
+
+	// Caso contrário, calculamos o OHLC para o timeframe solicitado
+	ohlc := calculateOHLC(ticks, timeframe)
+	return ohlc, true
+}
+
+func calculateOHLC(ticks []TickData, timeframe string) []float64 {
+	var open, high, low, close float64
+
+	if len(ticks) == 0 {
+		return nil
+	}
+
+	alignedTime := alignToTimeframe(ticks[0].Timestamp, timeframe)
+	open = ticks[0].Price
+	high = ticks[0].Price
+	low = ticks[0].Price
+	close = ticks[0].Price
+
+	for _, tick := range ticks {
+		if alignToTimeframe(tick.Timestamp, timeframe) != alignedTime {
+			break
+		}
+
+		if tick.Price > high {
+			high = tick.Price
+		}
+		if tick.Price < low {
+			low = tick.Price
+		}
+		close = tick.Price
+	}
+
+	return []float64{open, high, low, close}
+}
+
+// Função para determinar o timestamp inicial do candle com base no timeframe
+func alignToTimeframe(timestamp time.Time, timeframe string) time.Time {
+	switch timeframe {
+	case "m1":
+		return timestamp.Truncate(time.Minute)
+	case "m5":
+		return timestamp.Truncate(5 * time.Minute)
+	case "m15":
+		return timestamp.Truncate(15 * time.Minute)
+	case "m30":
+		return timestamp.Truncate(30 * time.Minute)
+	case "h1":
+		return timestamp.Truncate(time.Hour)
+	case "h4":
+		// Trunca para as 00h, 04h, 08h, 12h, 16h, ou 20h
+		h := timestamp.Hour() / 4 * 4
+		return time.Date(timestamp.Year(), timestamp.Month(), timestamp.Day(), h, 0, 0, 0, timestamp.Location())
+	case "D":
+		return timestamp.Truncate(24 * time.Hour)
+	default:
+		// Para timeframes não reconhecidos, retornamos o timestamp original
+		return timestamp
+	}
+}
+
+func GetCurrencyCode(pair string) (string, bool) {
+	code, exists := currencyMap[pair]
+	return code, exists
+}
+
+func GetAllCurrencyCodes() map[string]string {
+	return currencyMap
 }
