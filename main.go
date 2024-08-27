@@ -5,14 +5,32 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 	"wsaetherfy/currency"
 	"wsaetherfy/supabase"
+
 	"github.com/gorilla/websocket"
 	wsy "wsaetherfy/websocket"
+	supa "github.com/supabase-community/supabase-go"
 )
 
 var upgrader = websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
-var supabaseClient, _ = supabase.InitializeDB()
+var supabaseClient *supa.Client
+
+// Função para reiniciar a conexão com Supabase a cada 1 hora
+func initializeAndRefreshSupabaseConnection() {
+	for {
+		var err error
+		supabaseClient, err = supabase.InitializeDB()
+		if err != nil {
+			log.Fatalf("Erro ao inicializar o Supabase: %v", err)
+		}
+		log.Println("Conexão com Supabase reiniciada com sucesso.")
+		
+		// Espera por 1 hora antes de reiniciar a conexão
+		time.Sleep(1 * time.Hour)
+	}
+}
 
 func wsHandler(w http.ResponseWriter, r *http.Request) {
 	apiKey := r.Header.Get("X-API-Key")
@@ -107,15 +125,16 @@ func priceHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	prices, found := currency.GetPrices(pair)
+	priceData, found := currency.GetPrices(pair)
 	if !found {
 		http.Error(w, "Par de moedas não encontrado", http.StatusNotFound)
 		return
 	}
 
 	response := map[string]interface{}{
-		"pair":   pair,
-		"prices": prices,
+		"pair":      pair,
+		"price":     priceData.Price,
+		"timestamp": priceData.Timestamp,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -123,6 +142,9 @@ func priceHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	// Inicializar e reiniciar a conexão Supabase a cada 1 hora em uma goroutine separada
+	go initializeAndRefreshSupabaseConnection()
+
 	// Inicializar monitoramento de todas as moedas
 	go currency.MonitorAllCurrencies()
 
@@ -131,7 +153,7 @@ func main() {
 	http.HandleFunc("/prices", priceHandler)
 
 	// Inicializar servidor
-	port := ":8080"
+	port := ":8081"
 	fmt.Println("Servidor WebSocket e HTTP rodando na porta", port)
 	log.Fatal(http.ListenAndServe(port, nil))
 }

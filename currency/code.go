@@ -66,14 +66,18 @@ func GetAllCurrencyCodes() map[string]string {
 	return currencyMap
 }
 
-// Estrutura para armazenar preços
+type PriceData struct {
+	Price     float64
+	Timestamp int64
+}
+
 type PriceStore struct {
 	sync.RWMutex
-	prices map[string][]float64
+	prices map[string][]PriceData
 }
 
 var (
-	priceStore = &PriceStore{prices: make(map[string][]float64)}
+	priceStore = &PriceStore{prices: make(map[string][]PriceData)}
 )
 
 // Função para monitorar todas as moedas
@@ -102,22 +106,30 @@ func MonitorAllCurrencies() {
 				select {
 				case output := <-ticker:
 					priceStore.Lock()
+					priceData := PriceData{
+						Price:     float64(output.Price),
+						Timestamp: output.Time,  // Adicionando o timestamp
+					}
 					if prices, found := priceStore.prices[pair]; found {
-						priceStore.prices[pair] = append(prices, float64(output.Price))
+						priceStore.prices[pair] = append(prices, priceData)
 					} else {
-						priceStore.prices[pair] = []float64{float64(output.Price)}
+						priceStore.prices[pair] = []PriceData{priceData}
 					}
 					priceStore.Unlock()
 				}
 			}
+			
 		}(pair, subs)
 	}
 }
 
-// Função para obter os preços
-func GetPrices(pair string) ([]float64, bool) {
+func GetPrices(pair string) (PriceData, bool) {
 	priceStore.RLock()
 	defer priceStore.RUnlock()
 	prices, found := priceStore.prices[pair]
-	return prices, found
+	if !found || len(prices) == 0 {
+		return PriceData{}, false
+	}
+	return prices[len(prices)-1], found  // Retornar o último preço com timestamp
 }
+

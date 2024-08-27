@@ -37,28 +37,47 @@ func InitializeDB() (*supa.Client, error) {
 }
 
 func VerifyAPIKey(client *supa.Client, apiKey string) (bool, error) {
-	data, _, err := client.From("api_keys").Select("api_key", "exact", false).Eq("api_key", apiKey).Execute()
-	if err != nil {
-		return false, fmt.Errorf("erro ao consultar a tabela api_keys: %v", err)
-	}
+    data, _, err := client.From("api_keys").Select("api_key", "exact", false).Eq("api_key", apiKey).Execute()
+    if err != nil {
+        fmt.Println(err.Error())
+        if err.Error() == "JWT expired" {
+            err = refreshSession(client)
+            if err != nil {
+                return false, fmt.Errorf("erro ao renovar a sessão: %v", err)
+            }
+            data, _, err = client.From("api_keys").Select("api_key", "exact", false).Eq("api_key", apiKey).Execute()
+        }
+        if err != nil {
+            return false, fmt.Errorf("erro ao consultar a tabela api_keys: %v", err)
+        }
+    }
 
-	var result []map[string]interface{}
-	err = json.Unmarshal(data, &result)
-	if err != nil {
-		return false, fmt.Errorf("erro ao decodificar a resposta JSON: %v", err)
-	}
+    var result []map[string]interface{}
+    err = json.Unmarshal(data, &result)
+    if err != nil {
+        return false, fmt.Errorf("erro ao decodificar a resposta JSON: %v", err)
+    }
 
-	if len(result) > 0 {
-		return true, nil
-	}
+    if len(result) > 0 {
+        return true, nil
+    }
 
-	return false, nil
+    return false, nil
 }
 
 func GetUserIdByApiKey(client *supa.Client, apiKey string) (string, error) {
 	data, _, err := client.From("api_keys").Select("id", "exact", false).Eq("api_key", apiKey).Execute()
 	if err != nil {
-		return "", fmt.Errorf("erro ao consultar a tabela api_keys: %v", err)
+        if err.Error() == "JWT expired" {
+            err = refreshSession(client)
+            if err != nil {
+                return "", fmt.Errorf("erro ao renovar a sessão: %v", err)
+            }
+            data, _, err = client.From("api_keys").Select("id", "exact", false).Eq("api_key", apiKey).Execute()
+        }
+        if err != nil {
+            return "", fmt.Errorf("erro ao consultar a tabela api_keys: %v", err)
+        }
 	}
 
 	var result []map[string]interface{}
@@ -77,7 +96,16 @@ func GetUserIdByApiKey(client *supa.Client, apiKey string) (string, error) {
 func GetApiUsageByUserId(client *supa.Client, userId string) (int, int, error) {
 	data, _, err := client.From("api_usage").Select("*", "exact", false).Eq("id", userId).Execute()
 	if err != nil {
-		return 0, 0,fmt.Errorf("erro ao consultar a tabela api_usage: %v", err)
+        if err.Error() == "JWT expired" {
+            err = refreshSession(client)
+            if err != nil {
+                return 0, 0, fmt.Errorf("erro ao renovar a sessão: %v", err)
+            }
+            data, _, err = client.From("api_usage").Select("*", "exact", false).Eq("id", userId).Execute()
+        }
+        if err != nil {
+            return 0, 0, fmt.Errorf("erro ao consultar a tabela api_usage: %v", err)
+        }
 	}
 
 	var result []map[string]interface{}
@@ -98,7 +126,18 @@ func UpdateApiUserUsage(client *supa.Client, userId string, apiCalls int) error 
 		"current_api_calls": apiCalls,
 	}, "", "").Eq("id", userId).Execute()
 	if err != nil {
-		return fmt.Errorf("erro ao atualizar a tabela api_usage: %v", err)
+        if err.Error() == "JWT expired" {
+            err = refreshSession(client)
+            if err != nil {
+                return fmt.Errorf("erro ao renovar a sessão: %v", err)
+            }
+            _, _, err = client.From("api_usage").Update(map[string]interface{}{
+                "current_api_calls": apiCalls,
+            }, "", "").Eq("id", userId).Execute()
+        }
+        if err != nil {
+            return fmt.Errorf("erro ao atualizar a tabela api_usage: %v", err)
+        }
 	}
 
 	return nil
@@ -107,7 +146,16 @@ func UpdateApiUserUsage(client *supa.Client, userId string, apiCalls int) error 
 func SelectAllIdsFromApiUsage(client *supa.Client) ([]string, error) {
 	data, _, err := client.From("api_usage").Select("id", "exact", false).Execute()
 	if err != nil {
-		return nil, fmt.Errorf("erro ao consultar a tabela api_usage: %v", err)
+        if err.Error() == "JWT expired" {
+            err = refreshSession(client)
+            if err != nil {
+                return nil, fmt.Errorf("erro ao renovar a sessão: %v", err)
+            }
+            data, _, err = client.From("api_usage").Select("id", "exact", false).Execute()
+        }
+        if err != nil {
+            return nil, fmt.Errorf("erro ao consultar a tabela api_usage: %v", err)
+        }
 	}
 
 	var result []map[string]interface{}
@@ -135,9 +183,30 @@ func ResetApiUsage(client *supa.Client) error {
 			"current_api_calls": 0,
 		}, "", "").Eq("id", id).Execute()
 		if err != nil {
-			return fmt.Errorf("erro ao atualizar a tabela api_usage: %v", err)
+            if err.Error() == "JWT expired" {
+                err = refreshSession(client)
+                if err != nil {
+                    return fmt.Errorf("erro ao renovar a sessão: %v", err)
+                }
+                _, _, err = client.From("api_usage").Update(map[string]interface{}{
+                    "current_api_calls": 0,
+                }, "", "").Eq("id", id).Execute()
+            }
+            if err != nil {
+                return fmt.Errorf("erro ao atualizar a tabela api_usage: %v", err)
+            }
 		}
 	}
 
 	return nil
+}
+
+func refreshSession(client *supa.Client) error {
+    // Implemente a lógica para renovar o token aqui
+    err := client.Auth.Reauthenticate() // Este método pode variar
+    if err != nil {
+        return fmt.Errorf("erro ao tentar renovar a sessão: %v", err)
+    }
+
+    return nil
 }
