@@ -10,8 +10,8 @@ import (
 	"wsaetherfy/supabase"
 
 	"github.com/gorilla/websocket"
-	wsy "wsaetherfy/websocket"
 	supa "github.com/supabase-community/supabase-go"
+	wsy "wsaetherfy/websocket"
 )
 
 var upgrader = websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
@@ -26,7 +26,7 @@ func initializeAndRefreshSupabaseConnection() {
 			log.Fatalf("Erro ao inicializar o Supabase: %v", err)
 		}
 		log.Println("Conexão com Supabase reiniciada com sucesso.")
-		
+
 		// Espera por 1 hora antes de reiniciar a conexão
 		time.Sleep(1 * time.Hour)
 	}
@@ -92,7 +92,12 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case output := <-ticker:
-			err := conn.WriteJSON(output)
+			message := map[string]interface{}{
+				"pair":      pair,
+				"price":     output.Price,
+				"timestamp": output.Time,
+			}
+			err := conn.WriteJSON(message)
 			if err != nil {
 				log.Println("Erro ao enviar mensagem via WebSocket:", err)
 				return
