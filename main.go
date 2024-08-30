@@ -12,6 +12,7 @@ import (
 	"github.com/gorilla/websocket"
 	supa "github.com/supabase-community/supabase-go"
 	wsy "wsaetherfy/websocket"
+	"wsaetherfy/cronjob"
 )
 
 var upgrader = websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
@@ -124,6 +125,37 @@ func priceHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	userId, err := supabase.GetUserIdByApiKey(supabaseClient, apiKey)
+	if err != nil {
+		log.Printf("Error getting user ID by API key: %v", err)
+		http.Error(w, "Error getting user ID by API key", http.StatusInternalServerError)
+		return
+	}
+
+	subscriptionStatus, err := supabase.GetSubscriptionStatus(supabaseClient, userId)
+	if err != nil {
+		log.Printf("Error getting subscription status: %v", err)
+		http.Error(w, "Error getting subscription status", http.StatusInternalServerError)
+		return
+	}
+
+	if subscriptionStatus != "active" {
+		http.Error(w, "Subscription is not active", http.StatusUnauthorized)
+		return
+	}
+
+	maxApiCalls, apiCalls, err := supabase.GetApiUsageByUserId(supabaseClient, userId)
+	if err != nil {
+		log.Printf("Error getting API usage by user ID: %v", err)
+		http.Error(w, "Error getting API usage by user ID", http.StatusInternalServerError)
+		return
+	}
+
+	if apiCalls >= maxApiCalls {
+		http.Error(w, "API usage limit exceeded", http.StatusTooManyRequests)
+		return
+	}
+
 	pair := r.URL.Query().Get("pair")
 	if pair == "" {
 		http.Error(w, "Par de moedas é obrigatório", http.StatusBadRequest)
@@ -144,9 +176,14 @@ func priceHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
+	err = supabase.UpdateApiUserUsage(supabaseClient, userId, apiCalls+1)
+	if err != nil {
+		log.Printf("Error updating API user usage: %v", err)
+	}
 }
 
 func main() {
+	go cronjob.StartCronJob()
 	// Inicializar e reiniciar a conexão Supabase a cada 1 hora em uma goroutine separada
 	go initializeAndRefreshSupabaseConnection()
 

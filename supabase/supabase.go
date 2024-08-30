@@ -201,6 +201,28 @@ func ResetApiUsage(client *supa.Client) error {
 	return nil
 }
 
+func GetSubscriptionStatus(client *supa.Client, userId string) (string, error) {
+	data, _, err := client.From("subscriptions").Select("status", "exact", false).Eq("user_id", userId).Execute()
+	if err != nil {
+		return "", fmt.Errorf("erro ao consultar a tabela subscriptions: %v", err)
+	}
+
+	var result []map[string]interface{}
+	err = json.Unmarshal(data, &result)
+	if err != nil {
+		return "", fmt.Errorf("erro ao decodificar a resposta JSON: %v", err)
+	}
+
+	if len(result) > 0 {
+		if status, ok := result[0]["status"].(string); ok {
+			return status, nil
+		}
+		return "", fmt.Errorf("o campo 'status' não é uma string")
+	}
+
+	return "", nil
+}
+
 func refreshSession(client *supa.Client) error {
     // Implemente a lógica para renovar o token aqui
     err := client.Auth.Reauthenticate() // Este método pode variar
